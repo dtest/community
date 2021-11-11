@@ -36,4 +36,10 @@ fi
 
 echo "Detokenizing: $CC_TOKEN"
 
-curl -s -X POST "$URL/detokenize" -H "Authorization: Bearer $(gcloud auth print-identity-token)" -H "Content-Type:application/json" --data '{"user_id": "'$USERID'", "token": "'$CC_TOKEN'", "project_id": "'$PROJ'"}'
+if [ "$TOKEN_TYPE" = "kms" ]; then
+  URL="$URL/detokenize/kms"
+else
+  URL="$URL/detokenize/dlp"
+fi
+
+curl -s -X POST "$URL" -H "Authorization: Bearer $(gcloud auth print-identity-token)" -H "Content-Type:application/json" --data '{"user_id": "'$USERID'", "token": "'$CC_TOKEN'", "project_id": "'$PROJ'"}'

@@ -36,5 +36,10 @@ else
   USERID=$4
 fi
 
-AUTH=$(gcloud auth print-identity-token)
-echo $(curl -s -X POST "$URL/tokenize" -H "Authorization: Bearer $(gcloud auth print-identity-token)" -H "Content-Type:application/json" --data '{"cc": "'$CC'", "mm": "'$MM'", "yyyy": "'$YYYY'", "user_id": "'$USERID'", "project_id": "'$PROJ'"}')
+if [ "$TOKEN_TYPE" = "kms" ]; then
+  URL="$URL/tokenize/kms"
+else
+  URL="$URL/tokenize/dlp"
+fi
+
+echo $(curl -s -X POST "$URL" -H "Authorization: Bearer $(gcloud auth print-identity-token)" -H "Content-Type:application/json" --data '{"cc": "'$CC'", "mm": "'$MM'", "yyyy": "'$YYYY'", "user_id": "'$USERID'", "project_id": "'$PROJ'"}')

@@ -21,6 +21,11 @@
     "key_ring":                "", // The name of the key ring
     "key_name":                ""  // The actual key name
   },
+  "spanner": {
+    // These settings are required to store tokens in Spanner
+    "instance_id":             "",  // The id of the Spanner instance
+    "database":                ""   // The name of the database
+  },
   "logging": {
     "debug":                   false, // Toggle logging of debug() calls
     "version":                 true   // Log app file timestamp on launch and execution

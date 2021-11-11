@@ -10,3 +10,6 @@ PROJECT=""
 KMS_LOCATION=""
 KMS_KEY_RING=""
 KMS_KEY_NAME=""
+
+#Optionally enter type of tokenization: dlp (default) or kms
+TOKEN_TYPE=""

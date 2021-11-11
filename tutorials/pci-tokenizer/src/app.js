@@ -40,6 +40,20 @@ const KMS_KEY_DEF = kms.cryptoKeyPath(
   KMS_KEY_NAME
 );
 
+const {Spanner} = require('@google-cloud/spanner');
+const INSTANCE_ID = config.get('spanner.instance_id') || process.env.GCP_SPANNER_INSTANCE;
+const DATABASE = config.get('spanner.database') || process.env.GCP_SPANNER_DATABASE;
+
+// Creates a client
+const spanner = new Spanner({
+  projectId: PROJECT_ID,
+});
+
+// Gets a reference to a Cloud Spanner instance, database, table
+const instance = spanner.instance(INSTANCE_ID);
+const database = instance.database(DATABASE);
+const tokensTable = database.table('tokens');
+
 var tmpDlpKey = {};
 if (config.get('dlp.wrapped_key')) {
   tmpDlpKey = {
@@ -84,7 +98,7 @@ exports.dlp_crypto_tokenize = async (req, res) => {
   var mm = req.body.mm + '';
   var yyyy = req.body.yyyy + '';
   var userid = req.body.user_id + '';
-  var projectId = req.body.project_id || PROJECT_ID || process.env.GCP_PROJECT;
+  var projectId = req.body.project_id || PROJECT_ID;
 
   if (!projectId) {
     return res.status(500).send('Invalid input for project_id');
@@ -139,6 +153,28 @@ exports.dlp_crypto_tokenize = async (req, res) => {
     if (response.overview.transformationSummaries[0].results[0].code === 'ERROR') {
       return res.status(500).send(response);
     } else {
+      // Store token in Spanner
+      try {
+        // try to insert. if fails key exists, so update. This is done with mutations, not transactions.
+        // The expectation is tokens aren't deleted, and any update conflicts are acceptable.
+        await tokensTable.insert([{
+            token: String(token),
+            tokenType: "dlp",
+            created: Spanner.timestamp(new Date())
+          },
+        ]);
+      } catch (error) {
+        // Spanner error code 6 is 'row already exists' error, so insert failed because it already exists
+        if (error.code === 6) {
+          await tokensTable.update([{
+              token: String(token),
+              tokenType: "dlp",
+              updated: Spanner.timestamp(new Date())
+            },
+          ]);
+        }
+      }
+
       return res.status(200).send(token);
     }
   } catch (err) {
@@ -164,7 +200,7 @@ exports.dlp_crypto_detokenize = async (req, res) => {
   logVersion(`DLP detokenizing ver ${appVersion}`);
   var ccToken = req.body.token + '';
   var userid = req.body.user_id + '';
-  var projectId = req.body.project_id || PROJECT_ID || process.env.GCP_PROJECT;
+  var projectId = req.body.project_id || PROJECT_ID;
 
   if (!projectId) {
     return res.status(500).send('Invalid input for project_id');
@@ -172,6 +208,13 @@ exports.dlp_crypto_detokenize = async (req, res) => {
 
   if (!ccToken || ccToken.length < 10) {
     throw new Error('Invalid input for token: ' + ccToken);
+  }
+
+  // Validate if provided token is authentic, based on whether it exists in the Spanner DB.
+  try {
+    const validToken = await readTokenFromSpanner(ccToken, "dlp");
+  } catch (error) {
+    return res.status(500).send('Invalid input for token');
   }
 
   if (!userid || userid.length < 4) {
@@ -292,6 +335,13 @@ exports.kms_crypto_tokenize = async (req, res) => {
       return res.status(500).send(result);
     } else {
       const token = result.ciphertext.toString('base64');
+      // KMS token is non-deterministic, so it is insert-only. This is done with mutations, not transactions.
+      await tokensTable.insert([{
+          token: String(token),
+          tokenType: "kms",
+          created: Spanner.timestamp(new Date())
+        },
+      ]);
       return res.status(200).send(token);
     }
   } catch (err) {
@@ -307,7 +357,7 @@ exports.kms_crypto_tokenize = async (req, res) => {
  *  token   - The tokenized CC number
  *  user_id     - arbitrary user ID string (optional)
  *
- * If the auth_token was valid, this returns a JSON object containing the
+ * If the token was valid, this returns a JSON object containing the
  * sensitive payment card data that was stored under the given token.
  *
  * @param {object} req - tokenizer request object
@@ -332,6 +382,8 @@ exports.kms_crypto_detokenize = async (req, res) => {
   }
 
   try {
+    const validToken = await readTokenFromSpanner(ccToken, "kms");
+
     const ciphertext = Buffer.from(ccToken, 'base64');
     const name = KMS_KEY_DEF;
 
@@ -369,6 +421,33 @@ exports.kms_crypto_detokenize = async (req, res) => {
     return false;
   }
 };
+
+/**
+ * Reads a given token from Spanner backend storage. If the token is not found, throws an error.
+ *
+ * Returns the length of the tokens found (which should be exactly 1) if the token is valid.
+ *
+ * @param  {string} token - tokenizer token to validate as authentic
+ * @param  {string} tokenType - type of token provided: dlp or kms
+ */
+async function readTokenFromSpanner(token, tokenType) {
+  // Validate if provided token is authentic, based on whether it exists in the Spanner DB.
+  const query = {
+    sql: `SELECT token FROM tokens WHERE token = @token AND tokenType = @tokenType`,
+    params: {
+      token: String(token),
+      tokenType: String(tokenType),
+    },
+  };
+
+  const [tokenRows] = await database.run(query);
+
+  if (tokenRows.length != 1) {
+    throw new Error("No matches for provided token and tokenType");
+  }
+
+  return tokenRows.length;
+}
 
 /**
  * Helpful debug function that checks for the var DEBUG_LOGGING == true before writing to console.log()
